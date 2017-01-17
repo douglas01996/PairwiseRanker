@@ -25,7 +25,7 @@ def train_dataset(model, data, echo):
     total_data = len(data)
     loss = 0
     for i, inst in enumerate(data):
-        loss = model.train_step(inst.kbest,inst.gold)  # labels will be determined by model
+        loss = model.train_step2(inst)  # labels will be determined by model
         losses.append(loss)
         print 'instance: %s  loss: %s' %(i,loss)
         #avg_loss = avg_loss * (len(losses) - 1) / len(losses) + loss / len(losses)
@@ -39,9 +39,10 @@ def train_model():
                          os.path.join(DIR,TRAIN+'.gold'),
                          os.path.join(DIR, DEV + '.kbest'),
                          os.path.join(DIR, DEV + '.gold'),vocab_path= os.path.join(DIR, OUTPUT_DICT))
-    train_iter = data_tool.train_iter
+    data = data_tool.train_data
+    for inst in data:
+        inst.set_f1()
     dev_data = data_tool.dev_data
-    data = train_iter.read_all()
     print 'build model'
     model = dependency_model.get_model(data_tool.vocab.size(), data_tool.max_degree)
     print 'model established'

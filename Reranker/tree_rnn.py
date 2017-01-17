@@ -199,37 +199,42 @@ class TreeRNN(object):
         self.params.append(self.embeddings)
         self.recursive_unit = self.create_recursive_unit()
         self.leaf_unit = self.create_leaf_unit()
+        self.forget_unit = self.create_forget_gate_fun()
+        self.output_fn = self.create_output_fn()
+
         self.x = T.ivector(name='x')  # word indices
         self.tree = T.imatrix(name='tree')  # shape [None, self.degree]
-
         self.num_words = self.x.shape[0]  # total number of nodes (leaves + internal) in tree
         emb_x = self.embeddings[self.x]
         emb_x = emb_x * T.neq(self.x, -1).dimshuffle(0, 'x')  # zero-out non-existent embeddings
-
         self.tree_states = self.compute_tree(emb_x, self.tree)
-        self.final_state = self.tree_states[-1]
-        self.output_fn = self.create_output_fn()
-        self.pred_y = self.output_fn(self.final_state)
 
         self.x_gold = T.ivector(name='x_gold')  # word indices
         self.tree_gold = T.imatrix(name='tree_gold')  # shape [None, self.degree]
         emb_x_gold = self.embeddings[self.x_gold]
         emb_x_gold = emb_x_gold * T.neq(self.x_gold, -1).dimshuffle(0, 'x')  # zero-out non-existent embeddings
         self.tree_states_gold = self.compute_tree(emb_x_gold, self.tree_gold)
+
+        self.final_state = self.tree_states[-1]
         self.final_state_gold = self.tree_states_gold[-1]
-        self.gold_y = self.output_fn(self.final_state_gold)
+        self.pred_y1 = self.output_fn(self.final_state)
+        #self.gold_y = self.output_fn(self.final_state_gold)
+
+        self.gate_states = self.compute_tree_with_gate(emb_x, self.tree,self.tree_states_gold)
+        self.pred_y = self.output_fn(self.gate_states[-1])
+        self.gate_states_gold = self.compute_tree_with_gate(emb_x_gold, self.tree_gold,self.tree_states)
+        self.gold_y = self.output_fn(self.gate_states_gold[-1])
+
         self.loss_margin = self.loss_fn(self.gold_y, self.pred_y)
         updates_margin = self.adagrad(self.loss_margin)
         train_inputs_margin  = [self.x, self.tree ,self.x_gold,self.tree_gold]
         self._train_margin = theano.function(train_inputs_margin,
                                       [self.loss_margin],
-                                      updates=updates_margin)
-        self._evaluate = theano.function([self.x, self.tree],
-                                         self.final_state)
+                                      updates=updates_margin
+                                      )
 
         self._predict = theano.function([self.x, self.tree],
-                                        self.pred_y)
-
+                                        self.pred_y1)
 
     def _check_input(self, x, tree):
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
@@ -246,7 +251,6 @@ class TreeRNN(object):
         self._check_input(x, tree)
         self._check_input(x_gold, tree_gold)
         return self._train_margin(x, tree[:, :-1], x_gold,tree_gold[:, :-1])
-
 
     def predict(self, root_node):
         x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
@@ -270,7 +274,6 @@ class TreeRNN(object):
             return T.nnet.softmax(
                 T.dot(self.W_out, final_state) + self.b_out)
         return fn
-
     def create_output_fn_multi(self):
         self.W_out = theano.shared(self.init_matrix([self.output_dim, self.hidden_dim]))
         self.b_out = theano.shared(self.init_vector([self.output_dim]))
@@ -281,6 +284,24 @@ class TreeRNN(object):
                 T.dot(tree_states, self.W_out.T) +
                 self.b_out.dimshuffle('x', 0))
         return fn
+
+    def create_forget_gate_fun(self):
+        self.W_gate = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.U_gate = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_gate = theano.shared(self.init_vector([self.hidden_dim]))
+        self.params.extend([
+            self.W_gate, self.U_gate, self.b_gate,
+        ])
+
+        def unit(parent_h, compare_h):
+            f = T.nnet.sigmoid(
+                T.dot(self.W_gate, parent_h) +
+                T.dot(self.U_gate, compare_h) +
+                self.b_gate)
+
+            return parent_h - f * compare_h
+
+        return unit
 
     def create_recursive_unit(self):
         self.W_hx = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
@@ -298,6 +319,43 @@ class TreeRNN(object):
         def unit(leaf_x):
             return self.recursive_unit(leaf_x, dummy, dummy.sum(axis=1))
         return unit
+
+    def compute_tree_with_gate(self, emb_x, tree , tree_states):
+        num_nodes = tree.shape[0]  # num internal nodes
+        num_leaves = self.num_words - num_nodes
+        # compute leaf hidden states
+        leaf_h, _ = theano.map(
+            fn=self.leaf_unit,
+            sequences=[emb_x[:num_leaves]])
+        if self.irregular_tree:
+            init_node_h = T.concatenate([leaf_h, leaf_h], axis=0)
+        else:
+            init_node_h = leaf_h
+
+        # use recurrence to compute internal node hidden states
+        # sequences outputs_info non_sequences
+        # emb_x[num_leaves:]  tree T.arange(num_nodes)
+        # sequences, outputs_info, non_sequences
+        # cur_emb is one of emb_x[num_leaves:] the internal node emb
+        # node_info is one of tree, t is 0 to nums_nodes(internal number)
+        # node_h = leaf emb and parent emb
+        def _recurrence(cur_emb, node_info, t, node_h, last_h,compare_state):
+            child_exists = node_info > -1
+            offset = num_leaves * int(self.irregular_tree) - child_exists * t
+            child_h = node_h[node_info + offset] * child_exists.dimshuffle(0, 'x')
+            parent_h = self.recursive_unit(cur_emb, child_h, child_exists)
+            node_h = T.concatenate([node_h,
+                                    parent_h.reshape([1, self.hidden_dim])])
+            return node_h[1:], parent_h
+
+        dummy = theano.shared(self.init_vector([self.hidden_dim]))
+        (_, parent_h), _ = theano.scan(
+            fn=_recurrence,
+            outputs_info=[init_node_h, dummy],
+            sequences=[emb_x[num_leaves:], tree, T.arange(num_nodes)],
+            n_steps=num_nodes)
+
+        return T.concatenate([leaf_h, parent_h], axis=0)
 
     def compute_tree(self, emb_x, tree):
         num_nodes = tree.shape[0]  # num internal nodes
@@ -319,7 +377,7 @@ class TreeRNN(object):
         # cur_emb is one of emb_x[num_leaves:] the internal node emb
         # node_info is one of tree, t is 0 to nums_nodes(internal number)
         # node_h = leaf emb and parent emb
-        def _recurrence(cur_emb, node_info, t, node_h, last_h):
+        def _recurrence(cur_emb, node_info, t, node_h, last_h,compare_state):
             child_exists = node_info > -1
             offset = num_leaves * int(self.irregular_tree) - child_exists * t
             child_h = node_h[node_info + offset] * child_exists.dimshuffle(0, 'x')

@@ -51,6 +51,66 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
                 dummy,
                 dummy.sum(axis=1))
         return unit
+    def create_forget_gate_fun(self):
+        self.W_gate = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.U_gate = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_gate = theano.shared(self.init_vector([self.hidden_dim]))
+        # self.params.extend([
+        #     self.W_gate, self.U_gate, self.b_gate,
+        #    ])
+
+        def unit(parent_h, compare_h):
+            f = T.nnet.sigmoid(
+                T.dot(self.W_gate, parent_h) +
+                T.dot(self.U_gate, compare_h) +
+                self.b_gate)
+
+            return parent_h - f*compare_h
+
+        return unit
+
+    def compute_tree_with_gate(self, emb_x, tree, tree_states):
+        num_nodes = tree.shape[0]  # num internal nodes
+        num_leaves = self.num_words - num_nodes
+
+        # compute leaf hidden states
+        (leaf_h, leaf_c), _ = theano.map(
+            fn=self.leaf_unit,
+            sequences=[emb_x[:num_leaves]])
+        leaf_h, _ = theano.map(
+            fn=self.forget_unit,
+            sequences=[leaf_h[:num_leaves], tree_states[:num_leaves]])
+        if self.irregular_tree:
+            init_node_h = T.concatenate([leaf_h, leaf_h], axis=0)
+            init_node_c = T.concatenate([leaf_c, leaf_c], axis=0)
+        else:
+            init_node_h = leaf_h
+            init_node_c = leaf_c
+
+
+
+        # use recurrence to compute internal node hidden states
+        def _recurrence(cur_emb, node_info, t, compare_state, node_h, node_c, last_h):
+            child_exists = node_info > -1
+            offset = num_leaves * int(self.irregular_tree) - child_exists * t
+            child_h = node_h[node_info + offset] * child_exists.dimshuffle(0, 'x')
+            child_c = node_c[node_info + offset] * child_exists.dimshuffle(0, 'x')
+            parent_h, parent_c = self.recursive_unit(cur_emb, child_h, child_c, child_exists)
+            parent_gate_h = self.forget_unit(parent_h, compare_state)
+            node_h = T.concatenate([node_h,
+                                    parent_gate_h.reshape([1, self.hidden_dim])])
+            node_c = T.concatenate([node_c,
+                                    parent_c.reshape([1, self.hidden_dim])])
+            return node_h[1:], node_c[1:], parent_gate_h
+
+        dummy = theano.shared(self.init_vector([self.hidden_dim]))
+        (_, _, parent_h), _ = theano.scan(
+            fn=_recurrence,
+            outputs_info=[init_node_h, init_node_c, dummy],
+            sequences=[emb_x[num_leaves:], tree, T.arange(num_nodes),tree_states[num_leaves:]],
+            n_steps=num_nodes)
+
+        return T.concatenate([leaf_h, parent_h], axis=0)
 
     def compute_tree(self, emb_x, tree):
         num_nodes = tree.shape[0]  # num internal nodes

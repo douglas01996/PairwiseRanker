@@ -1,6 +1,7 @@
 import pickle
 import theano
 from theano import tensor as T
+import numpy as np
 import data_util
 import tree_lstm
 import tree_rnn
@@ -47,6 +48,21 @@ class DependencyModel(tree_lstm.ChildSumTreeLSTM):
             return T.sum(score)
         return fn
 
+    def train_step2(self,inst):
+        lens = len(inst.kbest)
+        losses = 0
+        max = 0
+        for j in range(1,lens):
+            if inst.f1score[max] > inst.f1score[j]:
+                gold = inst.kbest[max]
+                pred = inst.kbest[j]
+            else:
+                gold = inst.kbest[j]
+                pred = inst.kbest[max]
+            loss = np.mean(self.train_margin(gold,pred))
+            if loss > 0:
+                losses += loss
+        return losses
     def train_step(self, kbest_tree, gold_root):
         scores = []
         for tree in kbest_tree:
@@ -61,17 +77,17 @@ class DependencyModel(tree_lstm.ChildSumTreeLSTM):
         gold_score = self.predict(gold_root)
         pred_score = scores[max_id]
         loss = gold_score - pred_score
-        if True or loss < 0:
+        if loss < 0:
             self.train_margin(gold_root, pred_root)
         return loss
 
     def loss_fn(self, gold_y, pred_y):
-        loss = T.sum(pred_y-gold_y)
-        regular = 0
+        # loss = T.sum(pred_y-gold_y)
+        # regular = 0
         # L2 = T.sum(self.W_o ** 2)+T.sum(self.W_i ** 2)
         # L3 = (T.sum(self.W_o ** 2)+T.sum(self.W_i ** 2))
-        for param in [self.W_o,self.W_i,self.W_f,self.W_u,self.W_out]:
-            regular += T.sum(param ** 2)
+        # for param in [self.W_o,self.W_i,self.W_f,self.W_u,self.W_out]:
+        #     regular += T.sum(param ** 2)
         return T.sum(pred_y-gold_y)
 
 def get_model(num_emb, max_degree):

@@ -10,7 +10,13 @@ class instance(object):
         self.gold = gold
         self.gold_lines = gold_lines
         self.lines = lines
-        self.maxid = self.get_oracle_index()
+        self.f1score = []
+        #self.maxid = self.get_oracle_index()
+
+    def set_f1(self):
+        for l in self.lines:
+            f1 = eval_tool.evaluate(l, self.gold_lines)[0]
+            self.f1score.append(f1)
 
     def get_oracle_index(self):
         max = 0

@@ -1,4 +1,4 @@
-import data_reader
+import data_util
 import train_iterator
 
 
@@ -54,5 +54,5 @@ def read_dev(kbest_filename, gold_filename, vocab):
     for a,b,c,d,e in zip(kbest, scores, gold, lines, gold_lines):
         if len(c.children) == 0:
             continue
-        dev_data.append(data_reader.instance(a,b,c,d,e))
+        dev_data.append(data_util.instance(a,b,c,d,e))
     return dev_data

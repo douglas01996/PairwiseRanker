@@ -2,7 +2,7 @@ import os
 import dev_reader
 import data_util
 from eval import eval as eval_tool
-
+import numpy as np
 DIR = 'd:\\MacShare\\data2\\'
 TRAIN = 'train'
 DEV = 'dev'
@@ -91,15 +91,15 @@ def evaluate_dataset(model, data , addbase):
     pred_trees = []
     gold_trees = []
     for i, inst in enumerate(data):
-        pred_scores = [model.predict(tree) for tree in inst.kbest if tree.size == inst.gold.size]
-        if addbase:
-            data_util.normalize(pred_scores)
-            data_util.normalize(inst.scores)
-            scores = [p_s + b_s for p_s, b_s in zip(pred_scores, inst.scores)]
-        else:
-            scores = pred_scores
-        max_id = scores.index(max(scores))
-        for line in inst.lines[max_id]:
+        lens = len(inst.kbest)
+        max = 0
+        for j in range(1, lens):
+            loss = 0
+            if inst.kbest[j].size == inst.gold.size:
+                loss = np.mean(self.train_margin(inst.kbest[max],inst.kbest[j]))
+            if loss > 0:
+                max = j
+        for line in inst.lines[max]:
             pred_trees.append(line)
         pred_trees.append('\n')
         for line in inst.gold_lines:
