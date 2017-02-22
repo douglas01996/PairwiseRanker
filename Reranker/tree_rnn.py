@@ -220,7 +220,9 @@ class TreeRNN(object):
         self.pred_y1 = self.output_fn(self.final_state)
         #self.gold_y = self.output_fn(self.final_state_gold)
 
-        self.gate_states = self.compute_tree_with_gate(emb_x, self.tree,self.tree_states_gold)
+        #self.gate_states = self.compute_tree_with_gate(emb_x, self.tree,self.tree_states_gold)
+        self.gate_states = self.compute_tree_with_gate(emb_x, self.tree,self.tree_states)
+        #self.gate_states = self.compute_tree(emb_x, self.tree)
         self.pred_y = self.output_fn(self.gate_states[-1])
         self.gate_states_gold = self.compute_tree_with_gate(emb_x_gold, self.tree_gold,self.tree_states)
         self.gold_y = self.output_fn(self.gate_states_gold[-1])
